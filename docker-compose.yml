@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: auction-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: 9090
+      POSTGRES_DB: auctionedge
+    ports:
+      - "5432:5432"
+    volumes:
+      - auctionedge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: auction-backend
+    restart: unless-stopped
+    environment:
+      # Overrides DATABASE_URL to point at the 'postgres' service name,
+      # not localhost, since containers resolve each other by service name.
+      DATABASE_URL: postgresql://postgres:9090@postgres:5432/auctionedge
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app  # live-reload style mount for dev
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: auction-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # keep container's node_modules, don't overwrite from host
+
+volumes:
+  auctionedge_pgdata:
