@@ -1,7 +1,11 @@
+import math
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db.database import engine, Base
@@ -37,6 +41,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _sanitize_non_json_floats(value):
+    """
+    Replace any NaN/Infinity float with its string form. Starlette's
+    JSONResponse serializes with allow_nan=False (strict RFC 8259), but
+    FastAPI's default validation-error response echoes the raw rejected
+    input back in each error's "input" field -- if a client sends a
+    NaN/Infinity value for a numeric field, that raw float ends up in the
+    error body and crashes the response encoder with an unhandled
+    ValueError (a client-caused 500, discovered via HTTP-level fuzzing of
+    the bid endpoint). Sanitizing here fixes it for every endpoint, since
+    every request body is validated the same way.
+    """
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_non_json_floats(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_non_json_floats(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = _sanitize_non_json_floats(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 app.include_router(auth.router)
 app.include_router(users.router)

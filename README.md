@@ -1,7 +1,24 @@
 # AuctionEdge
 
 **Verification and Validation of Concurrent State in a Time-Bounded Auction API**
-ENGI 9839: Software Verification and Validation
+ENGI 9839 — Software Verification and Validation
+
+A full-stack auction platform (FastAPI + PostgreSQL + React) built as the subject
+of a systematic V&V exercise: bidding, wallet holds, soft-close timing, and
+auto-close all involve concurrency-sensitive invariants that this project
+tests deliberately and rigorously, rather than incidentally.
+
+---
+
+## Table of Contents
+
+1. [Tech Stack](#1-tech-stack)
+2. [Project Structure](#2-project-structure)
+3. [What's Implemented](#3-whats-implemented)
+4. [Verification & Validation](#4-verification--validation)
+5. [Running the App](#5-running-the-app)
+6. [Known Limitations](#6-known-limitations)
+7. [Remaining Work](#7-remaining-work)
 
 ---
 
@@ -15,6 +32,7 @@ ENGI 9839: Software Verification and Validation
 | Auth | JWT (PyJWT), bcrypt password hashing (via passlib) |
 | Real-time | Native WebSockets (FastAPI `WebSocket`, browser `WebSocket` API) |
 | Scheduling | APScheduler (`AsyncIOScheduler`) for UC5 auto-close |
+| Testing | pytest, pytest-cov, Hypothesis, mutmut, httpx |
 | Environment | Conda env `auction-edge`, Python 3.14 |
 
 ---
@@ -25,34 +43,18 @@ ENGI 9839: Software Verification and Validation
 auction-edge/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                  # FastAPI app, lifespan, router wiring
+│   │   ├── main.py                  # FastAPI app, lifespan, router wiring, error handlers
 │   │   ├── deps.py                  # get_current_user, get_current_admin (RBAC)
-│   │   ├── api/
-│   │   │   ├── auth.py              # /auth/register (+ wallet creation), /auth/login
-│   │   │   ├── users.py             # public profile lookup
-│   │   │   ├── auctions.py          # UC2, browse/search/pagination, relist, Buy It Now,
-│   │   │   │                        # pay, admin delete
-│   │   │   ├── bids.py              # UC1, UC3, UC4, admin-cancel, my-bids
-│   │   │   ├── notifications.py     # UC6, /users/me/notifications
-│   │   │   ├── wallet.py            # /wallet/me, /wallet/deposit (demo top-up)
-│   │   │   ├── websockets.py        # /ws/auctions/{id} live updates
-│   │   │   ├── ws_manager.py        # WebSocket connection manager
-│   │   │   └── debug.py             # DEBUG-ONLY: time injection, tied-bid injection
-│   │   ├── core/
-│   │   │   ├── bidding.py           # PURE bidding logic (increments, soft-close, ties,
-│   │   │   │                        # limits, Buy It Now validation)
-│   │   │   ├── wallet.py            # PURE wallet logic (available balance, sufficiency)
-│   │   │   ├── wallet_db.py         # wallet DB ops: locking, hold, release, charge
-│   │   │   ├── auto_close.py        # UC5 auto-close sweep (async, scheduler-driven)
-│   │   │   ├── notifications.py     # notification-creation helper
-│   │   │   ├── audit.py             # audit-log-entry helper
-│   │   │   ├── auth.py              # password hashing, JWT encode/decode
-│   │   │   └── config.py            # DEBUG_MODE, LOCKING_STRATEGY env toggles
-│   │   ├── models/                  # SQLAlchemy tables: User, Item, Auction, Bid,
-│   │   │                            # Notification, AuditLogEntry, Wallet
+│   │   ├── api/                     # route handlers (auctions, bids, auth, wallet, debug, ws)
+│   │   ├── core/                    # business logic -- see table below
+│   │   ├── models/                  # SQLAlchemy tables
 │   │   ├── schemas/                 # Pydantic request/response shapes
 │   │   └── db/database.py           # engine, session, get_db dependency
-│   ├── requirements.txt
+│   ├── tests/                       # see section 4 -- 142 tests across 5 tiers
+│   ├── requirements.txt             # runtime dependencies
+│   ├── requirements-dev.txt         # + pytest, hypothesis, mutmut, httpx
+│   ├── setup.cfg                    # pytest + mutmut config
+│   ├── TESTING.md                   # how to run every test tier
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
@@ -64,8 +66,19 @@ auction-edge/
 │   └── Dockerfile
 ├── scripts/
 │   └── concurrent_bid_test.py       # standalone race-condition load harness
+├── doccuments/                      # V&V report artifacts (see section 4)
 └── docker-compose.yml               # one-command full stack (Postgres + backend + frontend)
 ```
+
+Core business logic, by file:
+
+| File | Responsibility |
+|---|---|
+| `core/bidding.py` | Pure bidding logic — tiered increments, soft-close, ties, active-bid limits, Buy It Now validation |
+| `core/wallet.py` | Pure wallet logic — available balance, sufficiency check |
+| `core/wallet_db.py` | Wallet DB operations — ordered locking, hold, release, charge |
+| `core/auto_close.py` | UC5 auto-close sweep (async, scheduler-driven, idempotent) |
+| `core/config.py` | `DEBUG_MODE`, `LOCKING_STRATEGY` env toggles |
 
 > **Frontend note:** Buy It Now, search/filter/pagination, RBAC admin actions, and the
 > wallet are currently backend-only (testable via Swagger). Frontend UI for these is
@@ -76,6 +89,7 @@ auction-edge/
 ## 3. What's Implemented
 
 ### Core Use Cases (UC1–UC6)
+
 | UC | Feature | Key file(s) |
 |---|---|---|
 | UC1 | Place Bid — tiered increments, self-outbid block, soft-close extension, row-locking, wallet hold | `core/bidding.py`, `core/wallet_db.py`, `api/bids.py` |
@@ -86,52 +100,96 @@ auction-edge/
 | UC6 | Outbid/Won/Lost/Reserve-Met Notifications | `core/notifications.py` |
 
 ### Beyond the core use cases
-- **Auth**: JWT register/login, bcrypt hashing, first/last name, protected routes via `get_current_user`
+- **Auth**: JWT register/login, bcrypt hashing, protected routes via `get_current_user`
 - **Dashboard**: my listings, my bids, notifications, relist button, pay-now button
-- **Audit logging**: `bid_placed`, `bid_retracted`, `auction_closed`, `buy_it_now`, `admin_cancelled_bid` — all logged with IP where applicable
+- **Audit logging**: `bid_placed`, `bid_retracted`, `auction_closed`, `buy_it_now`, `admin_cancelled_bid`
 - **Live updates**: WebSocket push on bid placement, retraction, auto-close, and Buy It Now
 - **Docker Compose**: one-command full stack
-- **Photo upload**: client-side file → base64, displayed on Browse/Item Detail
 - **Buy It Now**: instant purchase, bypasses timer, closes auction immediately, wallet-integrated
-- **Bidder Account Limits**: max 5 active unsettled bids per user (`exceeds_active_bid_limit`)
+- **Bidder Account Limits**: max 5 active unsettled bids per user
 - **Search/Filter/Pagination**: `GET /auctions?category=&min_price=&max_price=&page=&page_size=`
-- **RBAC**: `is_admin` flag, admin-only delete-auction and cancel-any-bid endpoints (401 vs 403 distinction preserved)
+- **RBAC**: `is_admin` flag, admin-only delete-auction and cancel-any-bid endpoints
 - **Relisting**: sellers can relist an unsold auction with optional new price/duration
-- **Payment stub**: winner can "Pay Now" — now actually finalizes the wallet charge (converts hold → real deduction), not just a status flag
-- **Mock Wallet & Bid Hold System**: every bid freezes funds; outbid/retracted/cancelled releases the hold; winning holds convert to real charges only on payment; unsold auctions return the hold. Prevents double-spending across simultaneous bids on different auctions.
-
-### Testing infrastructure (built for the V&V research questions)
-
-**RQ1 — Race conditions at the auction's closing moment:**
-- `.with_for_update()` row-locking on `Auction` (default) and `Wallet` rows
-- `lock_wallets_in_order()` — wallets are always locked in a **fixed, sorted order** across any transaction touching more than one, specifically to prevent deadlock when a bid transaction must lock both the new bidder's and the previous highest bidder's wallets
-- **Wallet hold invariant**: `held_amount ≤ balance` for every user, at all times — must hold even under a literal double-spend attempt (one user, two auctions, same instant)
-- `resolve_tie()` in `core/bidding.py` — pure, deterministic tie-break for the "true simultaneous arrival, identical timestamp" case
-- Debug endpoints (`api/debug.py`, gated behind `AUCTIONEDGE_DEBUG=true`):
-  - `PATCH /debug/auctions/{id}/end-time` — force an auction's end time to any value
-  - `POST /debug/auctions/run-auto-close` — trigger UC5's closure sweep immediately
-  - `POST /debug/auctions/{id}/inject-tied-bids` — create two bids with an identical timestamp (impossible via the real API)
-  - `POST /debug/auctions/{id}/resolve-tie` — apply `resolve_tie()` to an injected tie
-- `scripts/concurrent_bid_test.py` — fires N simultaneous bid requests via `asyncio.gather`; reports whether the final price matches the highest successfully accepted bid (any mismatch = a real lost-update bug). Can also be pointed at the same user bidding on two different auctions simultaneously, to test the wallet double-spend invariant directly.
-- **Pluggable locking strategy** (`AUCTIONEDGE_LOCKING_STRATEGY` env var):
-  - `row_lock` (default) — app-level `SELECT ... FOR UPDATE`
-  - `serializable` — DB-level `SERIALIZABLE` isolation; conflicting transactions get `409` and must retry
-  - Run the load harness against both and compare — this is the report's comparative-analysis content
-
-**RQ2 — Mutation testing (`>` vs `≥`):**
-- `bid_meets_minimum(bid_amount, required_min)` — isolated one-line comparison in `core/bidding.py`
-- `exceeds_active_bid_limit(count)` — isolated boundary check (bid #5 succeeds, #6 fails)
-- `has_sufficient_funds(balance, held, amount)` — isolated wallet comparison in `core/wallet.py`
-- All three are deliberately separated from surrounding control flow so `mutmut` has a single unambiguous operator to flip, and your test suite can target each in isolation
-
-**RQ3 — Symbolic execution / edge-case bid inputs:**
-- `validate_bid()`, `validate_buy_it_now()`, `is_retractable()`, `compute_new_end_time()` — all pure functions with explicit branches, no I/O
-- Negative prices and `page=0` rejected at the FastAPI/Pydantic layer (`Query(ge=0)`, `Query(ge=1)`) before the function body runs — a clean boundary for input-generation tools
-- Boundary values worth testing: retraction at 14:59 / 15:00 / 15:01, soft-close bid at exactly 3:00 / 2:59 remaining, wallet hold at exactly available balance vs available − 0.01
+- **Payment stub**: winner's "Pay Now" converts the wallet hold into a real charge
+- **Mock Wallet & Bid Hold System**: every bid freezes funds; the `held_amount ≤ balance`
+  invariant is enforced even under a literal double-spend attempt (one user, two
+  auctions, simultaneous bids)
 
 ---
 
-## 4. How to Run
+## 4. Verification & Validation
+
+This is the core deliverable of the course project. Full methodology and
+technique-to-target mapping lives in `AuctionEdge_Test_Plan.md`; this section
+summarizes what was actually built and found.
+
+### Test suite: 142 automated tests across 5 tiers
+
+```
+backend/tests/
+├── core/          white-box coverage, BVA, equivalence partitioning,
+│                  multiple condition coverage, use-case-derived schema validators
+├── property/      Hypothesis property-based tests (RQ3)
+├── integration/    contract tests, bid/wallet/notification chain, WebSocket
+│                  broadcast, state transitions, HTTP-boundary fuzzing
+├── concurrency/   race-condition tests, RQ4 locking-strategy comparison
+└── system/        full docker-compose stack, real HTTP, real containers
+```
+
+See `backend/TESTING.md` for exact commands to run every tier.
+
+### Results by research question
+
+**RQ1 — Race conditions at the auction's closing moment and under simultaneous bids.**
+Verified with real concurrent threads (not simulated): no lost updates under
+concurrent bidding, the wallet double-spend guard holds under genuine
+concurrent access across two auctions, true-timestamp ties resolve to exactly
+one winner, and auto-close is idempotent under a repeated/overlapping sweep.
+
+**RQ2 — Mutation testing on boundary-comparison operators (`>` vs `≥`).**
+**100/100 mutants killed, 0 survivors** (91 in `core/bidding.py`, 9 in
+`core/wallet.py`), via `mutmut` against the BVA-driven test suite.
+
+**RQ3 — Automated edge-case generation for bid and wallet inputs.**
+Implemented via Hypothesis (the practical equivalent of symbolic execution
+for this input space): 6 property tests, each checking an invariant across
+~100 generated examples — `validate_bid` consistency, the Buy-It-Now price
+guard, `is_retractable` monotonicity, soft-close never shortening an auction,
+and the wallet-hold invariant.
+
+**RQ4 — Comparative analysis: app-level locking (`row_lock`) vs. DB-level
+`SERIALIZABLE`.** Same contention scenario run under both strategies:
+`row_lock` rejects losing transactions cleanly through validation (0
+conflicts); `serializable` lets them race and aborts the loser at commit time
+(conflicts observed, requiring client-side retry). Both preserve correctness.
+Full numbers in `doccuments/VV Results - RQ1-RQ4.md`.
+
+### Supporting numbers
+- Branch coverage on `core/`: **95–96%** overall (100% on `bidding.py`,
+  `wallet.py`, `wallet_db.py`, `notifications.py`, `audit.py`)
+- Decision table (UC1's alternate flows 3a/4a/5a/6a/6b, traced to specific
+  tests): `doccuments/Decision Table - UC1 Place Bid.md`
+- Exploratory testing (Saboteur, Antisocial tours): scripted and logged in
+  `doccuments/Exploratory Testing Findings.md`
+
+### Bugs found and fixed via testing
+- **NaN/Infinity crash**: sending `{"amount": NaN}` (or `Infinity`) to any
+  numeric field crashed the server with a 500 instead of a clean validation
+  error — FastAPI's default error handler echoes the rejected value back in
+  the response, and Starlette's strict JSON encoder can't serialize it.
+  Found via HTTP-boundary fuzzing, fixed with a custom exception handler in
+  `app/main.py`, verified in both the in-process suite and the real
+  containerized system test.
+
+### V&V report artifacts (`doccuments/`)
+- `AuctionEdge_Test_Plan.md` — the methodology this suite implements
+- `Decision Table - UC1 Place Bid.md`
+- `Exploratory Testing Findings.md` — tour scripts + findings log
+- `VV Results - RQ1-RQ4.md` — full results writeup, RQ-by-RQ
+
+---
+
+## 5. Running the App
 
 ### Option A — manual (your original workflow)
 ```powershell
@@ -158,6 +216,10 @@ cd auction-edge
 docker-compose up --build
 ```
 
+> Running the automated test suite? See `backend/TESTING.md` instead — it
+> covers `pytest`, mutation testing (needs WSL), and the docker-compose
+> system tests separately.
+
 ### Resetting the database schema
 No Alembic migrations set up — whenever a model gains a new column/table, wipe and let `create_all()` rebuild:
 ```powershell
@@ -183,39 +245,35 @@ $env:AUCTIONEDGE_LOCKING_STRATEGY = "serializable"   # default is "row_lock"
 ```
 Both env vars reset to defaults in a fresh terminal — that's intentional (safe by default).
 
-### Running the concurrent load test
-```powershell
-pip install httpx
-cd scripts
-# Edit TEST_USERS and AUCTION_ID at the top of the file first
-python concurrent_bid_test.py
-```
-
-### Testing the wallet double-spend scenario
+### Testing the wallet double-spend scenario manually
 1. Register a user — gets a $1000 demo wallet automatically.
 2. `GET /wallet/me` → balance 1000, held 0, available 1000.
 3. Create two auctions.
 4. Bid $900 on auction A → `held_amount` becomes 900, `available` becomes 100.
 5. Try to bid $900 on auction B → expect **400 Insufficient Funds** (only $100 available).
 6. Retract the bid on auction A → hold releases → now the $900 bid on B succeeds.
-7. For the true concurrent version: use `concurrent_bid_test.py` with the *same user* bidding on *two different auctions* at once with amounts that together exceed their balance. Exactly one request should succeed.
+7. For the true concurrent version, see `backend/tests/concurrency/test_race_conditions.py`
+   (automated) or `scripts/concurrent_bid_test.py` (manual load harness).
 
 ---
 
-## 5. Known Gaps (deliberately out of scope, per client interview decisions)
+## 6. Known Limitations
 - Proxy/automatic bidding — excluded from v1
 - Real payment gateway — stubbed only (wallet is a mock, not a real payment processor)
 - Real email verification — assumed via a simple token link, never modeled
 - Alembic migrations — schema changes require a manual `DROP SCHEMA` reset (see above)
 - Frontend UI for: Buy It Now, search/filter/pagination, RBAC admin actions, wallet — backend-complete, frontend deferred
+- No upper bound on bid amount — deliberate (see fuzzing notes in the test suite), not a gap
 
 ---
 
-## 6. Next Steps
-- TLA+ formal specification — central invariant candidates:
+## 7. Remaining Work
+- **TLA+ formal specification** — central invariant candidates:
   - No lost bid updates under concurrent access
-  - `held_amount ≤ balance` for every user, under any interleaving (the double-spend invariant)
+  - `held_amount ≤ balance` for every user, under any interleaving
   - Auto-close atomicity (never closes while a soft-close-triggering bid is in flight)
-- `pytest` unit test suite against `core/bidding.py`, `core/wallet.py`, `core/auto_close.py`
-- Mutation testing (`mutmut`) against the isolated comparison functions (RQ2)
-- Symbolic execution / automated edge-case generation for bid inputs and wallet amounts (RQ3)
+- **Exploratory testing execution** — tours are scripted (`doccuments/Exploratory
+  Testing Findings.md`) but need to actually be run against the live app and the
+  findings log filled in
+- **Final report** — structure results around RQ1–RQ4 per the test plan's own
+  traceability note, using `doccuments/VV Results - RQ1-RQ4.md` as the base

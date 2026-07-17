@@ -104,6 +104,41 @@ def test_validate_bid_rejects_when_now_at_end_time_boundary():
         validate_bid(**kwargs)
 
 
+@pytest.mark.parametrize(
+    "status_not_active, time_has_passed",
+    [
+        (False, False),  # neither sub-condition true -> accepted
+        (True, False),   # only the status sub-condition true -> rejected
+        (False, True),   # only the time sub-condition true -> rejected
+        (True, True),    # both sub-conditions true -> rejected
+    ],
+)
+def test_validate_bid_auction_ended_check_multiple_condition_coverage(status_not_active, time_has_passed):
+    """MCC on the compound `auction_status != "Active" or now >= auction_end_time`
+    check (UC1 flow 3a). Branch coverage alone only proves the combined
+    condition goes both ways; this proves each sub-condition independently
+    drives the outcome -- guards against e.g. an accidental `and` swapped
+    in for the `or`, which branch coverage would not catch."""
+    status = "Closed" if status_not_active else "Active"
+    end_time = (NOW - timedelta(minutes=1)) if time_has_passed else (NOW + timedelta(days=1))
+    kwargs = _bid_kwargs(auction_status=status, auction_end_time=end_time)
+
+    if status_not_active or time_has_passed:
+        with pytest.raises(BidRejected, match="already ended"):
+            validate_bid(**kwargs)
+    else:
+        validate_bid(**kwargs)  # no exception
+
+
+# 4a's compound condition (`current_highest_bidder_id is not None and
+# bidder_id == current_highest_bidder_id`) also gets full MCC coverage,
+# already provided by the three tests below: current_highest_bidder_id is
+# None (first sub-condition false, second short-circuited) in
+# test_validate_bid_accepts_valid_bid; True+False in
+# test_validate_bid_allows_outbidding_someone_else; True+True here. The
+# fourth combination (None but somehow equal to bidder_id) is infeasible
+# by construction, so no test targets it.
+
 def test_validate_bid_rejects_self_outbid():
     with pytest.raises(BidRejected, match="cannot outbid yourself"):
         validate_bid(**_bid_kwargs(current_highest_bidder_id=SOME_USER))
@@ -246,6 +281,29 @@ def test_validate_buy_it_now_rejects_when_not_offered():
 def test_validate_buy_it_now_rejects_when_auction_ended():
     with pytest.raises(BuyItNowRejected, match="already ended"):
         validate_buy_it_now(**_bin_kwargs(auction_status="Closed"))
+
+
+@pytest.mark.parametrize(
+    "status_not_active, time_has_passed",
+    [
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ],
+)
+def test_validate_buy_it_now_auction_ended_check_multiple_condition_coverage(status_not_active, time_has_passed):
+    """MCC on validate_buy_it_now's identical compound "already ended"
+    check -- same rationale as validate_bid's version above."""
+    status = "Closed" if status_not_active else "Active"
+    end_time = (NOW - timedelta(minutes=1)) if time_has_passed else (NOW + timedelta(days=1))
+    kwargs = _bin_kwargs(auction_status=status, auction_end_time=end_time)
+
+    if status_not_active or time_has_passed:
+        with pytest.raises(BuyItNowRejected, match="already ended"):
+            validate_buy_it_now(**kwargs)
+    else:
+        validate_buy_it_now(**kwargs)  # no exception
 
 
 def test_validate_buy_it_now_rejects_when_current_price_at_bin_boundary():
