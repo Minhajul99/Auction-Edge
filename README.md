@@ -235,4 +235,4 @@ Main resource groups:
 
 ## License
 
-No license has been specified for this project.
+All rights reserved to Md Minhajul Abedin & Nabil Hasan.
