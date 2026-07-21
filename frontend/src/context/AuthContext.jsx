@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from "react";
+import { extractErrorDetail } from "../services/api";
 
 const AuthContext = createContext(null);
 
@@ -32,7 +33,7 @@ export function AuthProvider({ children }) {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || "Registration failed");
+      throw new Error(extractErrorDetail(body, "Registration failed"));
     }
     const data = await res.json();
     setAuth({ token: data.access_token, user: data.user });
@@ -51,7 +52,7 @@ export function AuthProvider({ children }) {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || "Login failed");
+      throw new Error(extractErrorDetail(body, "Login failed"));
     }
     const data = await res.json();
     setAuth({ token: data.access_token, user: data.user });

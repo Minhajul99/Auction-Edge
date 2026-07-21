@@ -1,61 +1,216 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { listAuctions } from "../services/api";
+import { CATEGORIES } from "../constants";
+
+const ENDING_SOON_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+
+function PlaceholderImage() {
+  return (
+    <div className="flex h-full w-full items-center justify-center text-gray-300 dark:text-gray-600">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-12 w-12">
+        <path fillRule="evenodd" d="M1.5 6A2.25 2.25 0 013.75 3.75h16.5A2.25 2.25 0 0122.5 6v12a2.25 2.25 0 01-2.25 2.25H3.75A2.25 2.25 0 011.5 18V6zM3 16.06V18c0 .414.336.75.75.75h16.5A.75.75 0 0021 18v-1.94l-2.69-2.689a1.5 1.5 0 00-2.12 0l-.88.879.97.97a.75.75 0 11-1.06 1.06l-5.16-5.159a1.5 1.5 0 00-2.12 0L3 16.061zm10.125-7.81a1.125 1.125 0 112.25 0 1.125 1.125 0 01-2.25 0z" clipRule="evenodd" />
+      </svg>
+    </div>
+  );
+}
+
+function AuctionCard({ auction }) {
+  return (
+    <Link
+      to={`/auctions/${auction.id}`}
+      className="group flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg dark:border-white/10 dark:bg-gray-900"
+    >
+      <div className="relative aspect-4/3 w-full overflow-hidden bg-gray-100 dark:bg-gray-800">
+        {auction.photo ? (
+          <img
+            src={auction.photo}
+            alt=""
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        ) : (
+          <PlaceholderImage />
+        )}
+        {auction.reserve_met && (
+          <span className="absolute left-2 top-2 rounded-full bg-emerald-500/95 px-2 py-0.5 text-xs font-semibold text-white shadow-sm">
+            Reserve met
+          </span>
+        )}
+      </div>
+
+      <div className="flex flex-1 flex-col gap-1 p-4">
+        <div className="truncate font-medium text-gray-900 dark:text-white" title={auction.title}>
+          {auction.title}
+        </div>
+        <div className="text-lg font-semibold text-brand-600 dark:text-brand-400">
+          ${auction.current_price}
+        </div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          Ends {new Date(auction.end_time).toLocaleString()}
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function CardSkeleton() {
+  return (
+    <div className="animate-pulse overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div className="aspect-4/3 w-full bg-gray-200 dark:bg-gray-800" />
+      <div className="space-y-2 p-4">
+        <div className="h-4 w-3/4 rounded bg-gray-200 dark:bg-gray-800" />
+        <div className="h-4 w-1/2 rounded bg-gray-200 dark:bg-gray-800" />
+        <div className="h-3 w-2/3 rounded bg-gray-200 dark:bg-gray-800" />
+      </div>
+    </div>
+  );
+}
+
+function ScrollButton({ direction, onClick }) {
+  const isLeft = direction === "left";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isLeft ? "Scroll left" : "Scroll right"}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-100 dark:border-white/15 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/10"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+        {isLeft ? (
+          <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+        ) : (
+          <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+function EndingSoonCarousel({ auctions }) {
+  const scrollerRef = useRef(null);
+
+  const endingSoon = useMemo(() => {
+    const now = Date.now();
+    return auctions
+      .filter((a) => new Date(a.end_time).getTime() - now <= ENDING_SOON_WINDOW_MS)
+      .sort((a, b) => new Date(a.end_time) - new Date(b.end_time));
+  }, [auctions]);
+
+  if (endingSoon.length === 0) return null;
+
+  function scroll(direction) {
+    scrollerRef.current?.scrollBy({ left: direction * 280, behavior: "smooth" });
+  }
+
+  return (
+    <div className="mb-10">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
+            Ending Soon
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Closing within the next 3 days — don't miss out.
+          </p>
+        </div>
+        <div className="hidden gap-2 sm:flex">
+          <ScrollButton direction="left" onClick={() => scroll(-1)} />
+          <ScrollButton direction="right" onClick={() => scroll(1)} />
+        </div>
+      </div>
+
+      <div
+        ref={scrollerRef}
+        className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {endingSoon.map((a) => (
+          <div key={a.id} className="w-56 shrink-0 snap-start">
+            <AuctionCard auction={a} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CategoryFilter({ selected, onSelect }) {
+  const options = ["All", ...CATEGORIES];
+  return (
+    <div className="mb-6 flex flex-wrap gap-2">
+      {options.map((c) => {
+        const isActive = (c === "All" && !selected) || c === selected;
+        return (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onSelect(c === "All" ? null : c)}
+            className={[
+              "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
+              isActive
+                ? "bg-brand-500 text-white shadow-sm"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20",
+            ].join(" ")}
+          >
+            {c}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function Browse() {
   const [auctions, setAuctions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [category, setCategory] = useState(null);
 
   useEffect(() => {
-    listAuctions("Active")
+    setLoading(true);
+    listAuctions("Active", category)
       .then(setAuctions)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return <p>Loading auctions...</p>;
-  if (error) return <p style={{ color: "red" }}>Error: {error}</p>;
-  if (auctions.length === 0) return <p>No active auctions right now.</p>;
+  }, [category]);
 
   return (
     <div>
-      <h1>AuctionEdge — Browse</h1>
-      <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-        {auctions.map((a) => (
-          <Link
-            key={a.id}
-            to={`/auctions/${a.id}`}
-            style={{
-              border: "1px solid #ccc",
-              borderRadius: 8,
-              overflow: "hidden",
-              textDecoration: "none",
-              color: "inherit",
-              display: "block",
-            }}
-          >
-            {a.photo ? (
-              <img
-                src={a.photo}
-                alt=""
-                style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }}
-              />
-            ) : (
-              <div style={{ width: "100%", height: 140, background: "#eee" }} />
-            )}
-            <div style={{ padding: "0.75rem" }}>
-              <div>Current price: ${a.current_price}</div>
-              <div style={{ fontSize: "0.85rem", color: "#666" }}>
-                Ends: {new Date(a.end_time).toLocaleString()}
-              </div>
-              {a.reserve_met && (
-                <div style={{ color: "green", fontSize: "0.85rem" }}>Reserve met</div>
-              )}
-            </div>
-          </Link>
-        ))}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+          Live Auctions
+        </h1>
+        <p className="mt-1 text-gray-500 dark:text-gray-400">
+          Bid on items closing soon — prices update in real time.
+        </p>
       </div>
+
+      {error && (
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">
+          {error}
+        </div>
+      )}
+
+      {!loading && <EndingSoonCarousel auctions={auctions} />}
+
+      <CategoryFilter selected={category} onSelect={setCategory} />
+
+      {loading ? (
+        <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <CardSkeleton key={i} />
+          ))}
+        </div>
+      ) : auctions.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-300 py-16 text-center text-gray-500 dark:border-white/15 dark:text-gray-400">
+          {category ? `No active auctions in ${category} right now.` : "No active auctions right now — check back soon."}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+          {auctions.map((a) => (
+            <AuctionCard key={a.id} auction={a} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

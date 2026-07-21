@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createItem, createAuction } from "../services/api";
-
-const CATEGORIES = ["Gaming", "Photography", "Audio", "Computers"];
-const DURATIONS = [3, 5, 7, 10];
+import { useToast } from "../components/Toast";
+import { CATEGORIES, DURATIONS } from "../constants";
 
 // Keep uploaded images reasonably small since they're stored as base64
 // strings in the DB (no external file storage / CDN set up yet).
@@ -18,8 +17,13 @@ function fileToDataUrl(file) {
   });
 }
 
+const inputClasses =
+  "mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-800 dark:text-white";
+const labelClasses = "block text-sm font-medium text-gray-700 dark:text-gray-300";
+
 export default function CreateListing() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -81,6 +85,7 @@ export default function CreateListing() {
         duration_days: Number(durationDays),
       });
 
+      showToast("Listing created successfully!");
       navigate(`/auctions/${auction.id}`);
     } catch (err) {
       setError(err.message);
@@ -90,75 +95,105 @@ export default function CreateListing() {
   }
 
   return (
-    <div style={{ maxWidth: 480, margin: "0 auto" }}>
-      <h1>Create Listing</h1>
+    <div className="mx-auto max-w-xl">
+      <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+        Create Listing
+      </h1>
+      <p className="mt-1 mb-6 text-sm text-gray-500 dark:text-gray-400">
+        List an item for auction — set a starting price and let bidders take it from there.
+      </p>
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-        <label>
+      <form
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-5 rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-gray-900"
+      >
+        <label className={labelClasses}>
           Title
-          <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} required className={inputClasses} />
         </label>
 
-        <label>
+        <label className={labelClasses}>
           Description
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className={inputClasses}
+          />
         </label>
 
-        <label>
+        <label className={labelClasses}>
           Category
-          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputClasses}>
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
         </label>
 
-        <label>
-          Photo (upload from your computer)
-          <input type="file" accept="image/*" onChange={handlePhotoChange} required />
-        </label>
+        <div>
+          <label className={labelClasses}>Photo</label>
+          <label className="mt-1 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 px-4 py-8 text-center transition-colors hover:border-brand-400 hover:bg-brand-50/50 dark:border-white/15 dark:hover:border-brand-500 dark:hover:bg-brand-500/5">
+            <span className="text-sm font-medium text-gray-600 dark:text-gray-300">
+              Click to upload a photo
+            </span>
+            <span className="text-xs text-gray-400">PNG or JPG, up to 2MB</span>
+            <input type="file" accept="image/*" onChange={handlePhotoChange} required className="hidden" />
+          </label>
+          {photoPreview && (
+            <img
+              src={photoPreview}
+              alt="Preview"
+              className="mt-3 max-h-48 rounded-lg border border-gray-200 object-cover dark:border-white/10"
+            />
+          )}
+        </div>
 
-        {photoPreview && (
-          <img
-            src={photoPreview}
-            alt="Preview"
-            style={{ maxWidth: "100%", maxHeight: 200, borderRadius: 8 }}
-          />
-        )}
+        <div className="grid grid-cols-2 gap-4">
+          <label className={labelClasses}>
+            Starting Price ($)
+            <input
+              type="number"
+              step="0.01"
+              value={startingPrice}
+              onChange={(e) => setStartingPrice(e.target.value)}
+              required
+              className={inputClasses}
+            />
+          </label>
 
-        <label>
-          Starting Price ($)
-          <input
-            type="number"
-            step="0.01"
-            value={startingPrice}
-            onChange={(e) => setStartingPrice(e.target.value)}
-            required
-          />
-        </label>
+          <label className={labelClasses}>
+            Duration
+            <select value={durationDays} onChange={(e) => setDurationDays(e.target.value)} className={inputClasses}>
+              {DURATIONS.map((d) => (
+                <option key={d} value={d}>{d} days</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-        <label>
-          Reserve Price ($) — optional, must be higher than starting price
+        <label className={labelClasses}>
+          Reserve Price ($) <span className="font-normal text-gray-400">— optional, must exceed starting price</span>
           <input
             type="number"
             step="0.01"
             value={reservePrice}
             onChange={(e) => setReservePrice(e.target.value)}
+            className={inputClasses}
           />
         </label>
 
-        <label>
-          Duration
-          <select value={durationDays} onChange={(e) => setDurationDays(e.target.value)}>
-            {DURATIONS.map((d) => (
-              <option key={d} value={d}>{d} days</option>
-            ))}
-          </select>
-        </label>
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">
+            {error}
+          </div>
+        )}
 
-        {error && <p style={{ color: "red" }}>{error}</p>}
-
-        <button type="submit" disabled={submitting}>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+        >
           {submitting ? "Creating..." : "Create Listing"}
         </button>
       </form>

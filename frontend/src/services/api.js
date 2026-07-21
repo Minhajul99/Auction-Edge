@@ -1,8 +1,25 @@
-const BASE_URL = "http://127.0.0.1:8000";
+export const BASE_URL = "http://127.0.0.1:8000";
 
 function getToken() {
   const saved = localStorage.getItem("auctionedge_auth");
   return saved ? JSON.parse(saved).token : null;
+}
+
+// FastAPI's `detail` field is a plain string for our own HTTPException
+// raises (e.g. "Insufficient funds: ..."), but a LIST of Pydantic error
+// objects for 422 validation failures (e.g. reserve_price <= starting_price).
+// Passing that list straight into `new Error(...)` silently stringifies it
+// to "[object Object]" -- this extracts a readable message from either shape.
+export function extractErrorDetail(body, fallback) {
+  const detail = body?.detail;
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => (e.msg || JSON.stringify(e)).replace(/^Value error,\s*/, ""))
+      .join("; ");
+  }
+  return fallback;
 }
 
 async function request(path, options = {}) {
@@ -19,7 +36,7 @@ async function request(path, options = {}) {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      detail = extractErrorDetail(body, detail);
     } catch {
       // response wasn't JSON, ignore
     }
@@ -60,13 +77,24 @@ export function createAuction(auction) {
   });
 }
 
-export function listAuctions(statusFilter) {
-  const query = statusFilter ? `?status_filter=${statusFilter}` : "";
+export function listAuctions(statusFilter, category) {
+  const params = new URLSearchParams();
+  if (statusFilter) params.set("status_filter", statusFilter);
+  if (category) params.set("category", category);
+  const query = params.toString() ? `?${params.toString()}` : "";
   return request(`/auctions${query}`);
 }
 
 export function getAuction(auctionId) {
   return request(`/auctions/${auctionId}`);
+}
+
+export function acceptHighestBid(auctionId) {
+  return request(`/auctions/${auctionId}/accept-bid`, { method: "POST" });
+}
+
+export function cancelAuction(auctionId) {
+  return request(`/auctions/${auctionId}/cancel`, { method: "POST" });
 }
 
 // --- Bids ---
