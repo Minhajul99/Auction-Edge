@@ -2,7 +2,11 @@ import uuid
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, field_validator
 
-ALLOWED_CATEGORIES = {"Gaming", "Photography", "Audio", "Computers"}
+ALLOWED_CATEGORIES = {
+    "Gaming", "Photography", "Audio", "Computers", "Books", "Movies & TV",
+    "Music", "Collectibles", "Fashion", "Home & Garden", "Sports & Outdoors",
+    "Toys & Games", "Art", "Jewelry & Watches", "Other",
+}
 
 
 class ItemCreate(BaseModel):

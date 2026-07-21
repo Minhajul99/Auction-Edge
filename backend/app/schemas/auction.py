@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional, Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 
-DurationDays = Literal[3, 5, 7, 10]
+DurationDays = Literal[1, 3, 5, 7, 10, 14]
 
 
 class AuctionCreate(BaseModel):
@@ -49,6 +49,9 @@ class AuctionOut(BaseModel):
 
     id: uuid.UUID
     item_id: uuid.UUID
+    seller_id: uuid.UUID
+    title: str
+    description: Optional[str] = None
     starting_price: Decimal
     current_price: Decimal
     start_time: datetime

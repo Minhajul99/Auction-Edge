@@ -54,6 +54,38 @@ async def close_expired_auctions() -> None:
         db.close()
 
 
+def close_auction_as_sold(db: Session, auction: Auction, winning_bid: Bid) -> None:
+    """
+    Shared "Sold" closure logic: sets status and fires the winner/seller/
+    losers notification fan-out. Reused by the scheduler-driven auto-close
+    sweep below and by the seller's manual "accept bid early" endpoint
+    (api/auctions.py) — same outcome, two different triggers.
+
+    Does NOT commit, log the audit action, or broadcast -- callers differ
+    on timing/action-name/acting-user for those, so they stay caller-side.
+    """
+    auction.status = "Closed"
+
+    create_notification(
+        db, user_id=winning_bid.bidder_id, auction_id=auction.id, notification_type="won"
+    )
+    create_notification(
+        db, user_id=auction.item.seller_id, auction_id=auction.id,
+        notification_type="seller_auction_closed",
+    )
+    other_bidder_ids = {
+        b.bidder_id
+        for b in db.query(Bid)
+        .filter(Bid.auction_id == auction.id, Bid.status.in_(["active", "outbid"]))
+        .all()
+        if b.bidder_id != winning_bid.bidder_id
+    }
+    for bidder_id in other_bidder_ids:
+        create_notification(
+            db, user_id=bidder_id, auction_id=auction.id, notification_type="lost"
+        )
+
+
 async def _close_single_auction(db: Session, auction_id: uuid.UUID, now: datetime) -> None:
     # Row-level lock — if a bid is mid-flight on this auction (extending
     # end_time via soft-close), this blocks until that transaction commits,
@@ -88,27 +120,7 @@ async def _close_single_auction(db: Session, auction_id: uuid.UUID, now: datetim
     )
 
     if outcome == "Sold":
-        auction.status = "Closed"
-
-        winning_bid = highest_bid
-        create_notification(
-            db, user_id=winning_bid.bidder_id, auction_id=auction_id, notification_type="won"
-        )
-        create_notification(
-            db, user_id=auction.item.seller_id, auction_id=auction_id,
-            notification_type="seller_auction_closed",
-        )
-        other_bidder_ids = {
-            b.bidder_id
-            for b in db.query(Bid)
-            .filter(Bid.auction_id == auction_id, Bid.status.in_(["active", "outbid"]))
-            .all()
-            if b.bidder_id != winning_bid.bidder_id
-        }
-        for bidder_id in other_bidder_ids:
-            create_notification(
-                db, user_id=bidder_id, auction_id=auction_id, notification_type="lost"
-            )
+        close_auction_as_sold(db, auction, highest_bid)
         logger.info(f"Auction {auction_id} closed — SOLD at {auction.current_price}")
 
     elif outcome == "Unsold-NoBids":

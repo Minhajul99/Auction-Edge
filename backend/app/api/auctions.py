@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -12,14 +13,32 @@ from app.models.auction import Auction
 from app.models.bid import Bid
 from app.models.user import User
 from app.schemas.item import ItemCreate, ItemOut
-from app.schemas.auction import AuctionCreate, AuctionOut
+from app.schemas.auction import AuctionCreate, AuctionOut, DurationDays
 from app.core.bidding import validate_buy_it_now, BuyItNowRejected
 from app.core.notifications import create_notification
 from app.core.audit import log_action
 from app.core.wallet import InsufficientFunds
 from app.core.wallet_db import lock_wallets_in_order, place_hold, release_hold, finalize_charge, ensure_can_hold
+from app.core.auto_close import close_auction_as_sold
+from app.api.ws_manager import manager
 
 router = APIRouter(prefix="/auctions", tags=["auctions"])
+
+VALID_DURATIONS = get_args(DurationDays)
+
+
+def _auction_to_ws_payload(auction: Auction, event: str) -> dict:
+    reserve_met = (
+        auction.reserve_price is None or auction.current_price >= auction.reserve_price
+    )
+    return {
+        "event": event,
+        "id": str(auction.id),
+        "current_price": str(auction.current_price),
+        "end_time": auction.end_time.isoformat(),
+        "status": auction.status,
+        "reserve_met": reserve_met,
+    }
 
 
 @router.post("/items", response_model=ItemOut, status_code=status.HTTP_201_CREATED)
@@ -187,6 +206,117 @@ def buy_it_now(
     return _to_auction_out(auction)
 
 
+@router.post("/{auction_id}/accept-bid", response_model=AuctionOut)
+async def accept_highest_bid(
+    auction_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Lets the seller close their own auction early and accept the current
+    highest bid, instead of waiting for the timer or the auto-close sweep.
+    Reuses the exact same "Sold" closure logic UC5's auto-close uses
+    (core/auto_close.py::close_auction_as_sold) -- same notification
+    fan-out (winner/seller/losers), just triggered manually instead of by
+    the scheduler.
+    """
+    auction = (
+        db.query(Auction).filter(Auction.id == auction_id).with_for_update().first()
+    )
+    if auction is None:
+        raise HTTPException(status_code=404, detail="Auction not found")
+
+    item = db.get(Item, auction.item_id)
+    if item.seller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only accept bids on your own listings.")
+
+    if auction.status != "Active":
+        raise HTTPException(status_code=400, detail="This auction is not currently active.")
+
+    highest_bid = (
+        db.query(Bid)
+        .filter(Bid.auction_id == auction_id, Bid.status == "active")
+        .order_by(Bid.amount.desc())
+        .first()
+    )
+    if highest_bid is None:
+        raise HTTPException(status_code=400, detail="There are no active bids to accept yet.")
+
+    close_auction_as_sold(db, auction, highest_bid)
+
+    log_action(
+        db,
+        user_id=current_user.id,
+        action="bid_accepted_early",
+        entity_type="Auction",
+        entity_id=auction_id,
+    )
+
+    db.commit()
+    db.refresh(auction)
+
+    await manager.broadcast(auction_id, _auction_to_ws_payload(auction, "auction_closed"))
+
+    return _to_auction_out(auction)
+
+
+@router.post("/{auction_id}/cancel", response_model=AuctionOut)
+async def cancel_auction(
+    auction_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Lets the seller withdraw their own listing before it closes naturally.
+    Releases the current highest bidder's wallet hold (if any) and
+    notifies them -- same hold-release discipline as the Unsold-
+    ReserveNotMet auto-close outcome.
+    """
+    auction = (
+        db.query(Auction).filter(Auction.id == auction_id).with_for_update().first()
+    )
+    if auction is None:
+        raise HTTPException(status_code=404, detail="Auction not found")
+
+    item = db.get(Item, auction.item_id)
+    if item.seller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only cancel your own listings.")
+
+    if auction.status != "Active":
+        raise HTTPException(status_code=400, detail="Only an active auction can be cancelled.")
+
+    highest_bid = (
+        db.query(Bid)
+        .filter(Bid.auction_id == auction_id, Bid.status == "active")
+        .order_by(Bid.amount.desc())
+        .first()
+    )
+    if highest_bid is not None:
+        wallets = lock_wallets_in_order(db, [highest_bid.bidder_id])
+        release_hold(wallets[highest_bid.bidder_id], highest_bid.amount)
+        create_notification(
+            db, user_id=highest_bid.bidder_id, auction_id=auction_id,
+            notification_type="auction_cancelled",
+        )
+
+    auction.status = "Cancelled"
+
+    log_action(
+        db,
+        user_id=current_user.id,
+        action="auction_cancelled",
+        entity_type="Auction",
+        entity_id=auction_id,
+    )
+
+    db.commit()
+    db.refresh(auction)
+
+    await manager.broadcast(auction_id, _auction_to_ws_payload(auction, "auction_cancelled"))
+
+    return _to_auction_out(auction)
+
+
 @router.post("/{auction_id}/relist", response_model=AuctionOut, status_code=status.HTTP_201_CREATED)
 def relist_auction(
     auction_id: uuid.UUID,
@@ -217,7 +347,7 @@ def relist_auction(
     new_starting_price = (
         Decimal(str(starting_price)) if starting_price is not None else old_auction.starting_price
     )
-    new_duration = duration_days if duration_days in (3, 5, 7, 10) else 7
+    new_duration = duration_days if duration_days in VALID_DURATIONS else 7
 
     now = datetime.now(timezone.utc)
     new_auction = Auction(
@@ -376,6 +506,9 @@ def _to_auction_out(auction: Auction) -> AuctionOut:
     return AuctionOut(
         id=auction.id,
         item_id=auction.item_id,
+        seller_id=auction.item.seller_id,
+        title=auction.item.title if auction.item else "Untitled Item",
+        description=auction.item.description if auction.item else None,
         starting_price=auction.starting_price,
         current_price=auction.current_price,
         start_time=auction.start_time,
