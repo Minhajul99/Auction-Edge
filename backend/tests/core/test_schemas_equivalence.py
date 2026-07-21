@@ -28,13 +28,13 @@ def test_item_create_rejects_invalid_category(category):
         ItemCreate(title="T", category=category, photos=["url"])
 
 
-@pytest.mark.parametrize("duration", [3, 5, 7, 10])
+@pytest.mark.parametrize("duration", [1, 3, 5, 7, 10, 14])
 def test_auction_create_accepts_valid_duration_presets(duration):
     auction = AuctionCreate(item_id=uuid.uuid4(), starting_price=Decimal("10"), duration_days=duration)
     assert auction.duration_days == duration
 
 
-@pytest.mark.parametrize("duration", [1, 4, 14, 0, -3])
+@pytest.mark.parametrize("duration", [2, 4, 15, 21, 0, -3])
 def test_auction_create_rejects_arbitrary_duration_values(duration):
     with pytest.raises(ValidationError):
         AuctionCreate(item_id=uuid.uuid4(), starting_price=Decimal("10"), duration_days=duration)

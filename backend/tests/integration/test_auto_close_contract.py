@@ -31,7 +31,7 @@ from app.models.bid import Bid
 from app.models.audit_log import AuditLogEntry
 from app.models.notification import Notification
 from app.core.auth import hash_password
-from app.core.auto_close import close_expired_auctions
+from app.core.auto_close import close_expired_auctions, _close_single_auction
 
 
 def _create_expired_auction(*, reserve_price, current_price, bid_amount, held_amount):
@@ -261,6 +261,149 @@ def test_auto_close_notification_fan_out_reaches_winner_seller_and_losers(sold_a
     for loser_id in ids["loser_ids"]:
         assert notification_types_for(loser_id) == {"lost"}
     db.close()
+
+
+def _create_expired_auction_no_bids():
+    """Seller only, no bidder, no Bid rows at all -- for the
+    'Unsold-NoBids' outcome, previously untested (existing fixtures only
+    covered the Sold and Unsold-ReserveNotMet outcomes)."""
+    db: Session = SessionLocal()
+    now = datetime.now(timezone.utc)
+
+    seller = User(
+        first_name="Seller", last_name="Test", email=f"{uuid.uuid4()}@example.test",
+        password_hash=hash_password("x"),
+    )
+    db.add(seller)
+    db.flush()
+    db.add(Wallet(user_id=seller.id, balance=Decimal("0"), held_amount=Decimal("0")))
+
+    item = Item(title="No-Bids Auto-Close Item", description="d", category="Gaming", seller_id=seller.id)
+    db.add(item)
+    db.flush()
+
+    auction = Auction(
+        item_id=item.id, starting_price=Decimal("50"), reserve_price=None,
+        current_price=Decimal("50"), start_time=now - timedelta(days=1),
+        end_time=now - timedelta(minutes=1), status="Active",
+    )
+    db.add(auction)
+    db.commit()
+
+    ids = dict(auction_id=auction.id, item_id=item.id, seller_id=seller.id)
+    db.close()
+    return ids
+
+
+def _cleanup_no_bids(ids: dict):
+    db: Session = SessionLocal()
+    db.query(Notification).filter(Notification.auction_id == ids["auction_id"]).delete()
+    db.query(AuditLogEntry).filter(AuditLogEntry.entity_id == ids["auction_id"]).delete()
+    db.query(Auction).filter(Auction.id == ids["auction_id"]).delete()
+    db.query(Item).filter(Item.id == ids["item_id"]).delete()
+    db.query(Wallet).filter(Wallet.user_id == ids["seller_id"]).delete(synchronize_session=False)
+    db.query(User).filter(User.id == ids["seller_id"]).delete(synchronize_session=False)
+    db.commit()
+    db.close()
+
+
+@pytest.fixture
+def expired_auction_no_bids():
+    ids = _create_expired_auction_no_bids()
+    yield ids
+    _cleanup_no_bids(ids)
+
+
+def test_auto_close_unsold_no_bids_outcome(expired_auction_no_bids):
+    ids = expired_auction_no_bids
+    asyncio.run(close_expired_auctions())
+
+    db = SessionLocal()
+    auction = db.get(Auction, ids["auction_id"])
+    assert auction.status == "Unsold-NoBids"
+
+    seller_notifications = {
+        n.type for n in db.query(Notification)
+        .filter(Notification.user_id == ids["seller_id"], Notification.auction_id == ids["auction_id"])
+        .all()
+    }
+    assert seller_notifications == {"unsold_no_bids"}
+    db.close()
+    assert _closure_log_count(ids["auction_id"]) == 1
+
+
+def test_close_single_auction_is_a_no_op_when_auction_no_longer_exists():
+    """Line 69's guard: the outer sweep found this ID, but the row is
+    gone by the time this function runs (e.g. an admin deleted it
+    concurrently). Calling the internal function directly, bypassing the
+    outer query, is the only way to construct this without a genuine
+    race between two real processes."""
+    db = SessionLocal()
+    # Must not raise -- just a clean no-op.
+    asyncio.run(_close_single_auction(db, uuid.uuid4(), datetime.now(timezone.utc)))
+    db.close()
+
+
+@pytest.fixture
+def already_closed_auction():
+    ids = _create_expired_auction(
+        reserve_price=None, current_price=Decimal("60"),
+        bid_amount=Decimal("60"), held_amount=Decimal("60"),
+    )
+    db = SessionLocal()
+    db.query(Auction).filter(Auction.id == ids["auction_id"]).update({"status": "Closed"})
+    db.commit()
+    db.close()
+    yield ids
+    _cleanup(ids)
+
+
+def test_close_single_auction_is_a_no_op_when_status_already_not_active(already_closed_auction):
+    """Line 75's compound guard, status sub-condition: another process
+    already closed this auction between the outer query and this
+    function acquiring the row lock."""
+    ids = already_closed_auction
+    close_db = SessionLocal()
+    asyncio.run(_close_single_auction(close_db, ids["auction_id"], datetime.now(timezone.utc)))
+    close_db.close()
+
+    db = SessionLocal()
+    auction = db.get(Auction, ids["auction_id"])
+    assert auction.status == "Closed"  # unchanged
+    db.close()
+    assert _closure_log_count(ids["auction_id"]) == 0  # never actually closed BY this call
+
+
+@pytest.fixture
+def not_yet_expired_auction():
+    ids = _create_expired_auction(
+        reserve_price=None, current_price=Decimal("60"),
+        bid_amount=Decimal("60"), held_amount=Decimal("60"),
+    )
+    db = SessionLocal()
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.query(Auction).filter(Auction.id == ids["auction_id"]).update({"end_time": future})
+    db.commit()
+    db.close()
+    yield ids
+    _cleanup(ids)
+
+
+def test_close_single_auction_is_a_no_op_when_end_time_not_yet_passed(not_yet_expired_auction):
+    """Line 75's compound guard, time sub-condition: a concurrent bid
+    pushed end_time forward (soft-close) between the outer query and
+    this function acquiring the row lock, so it's no longer actually
+    expired."""
+    ids = not_yet_expired_auction
+    close_db = SessionLocal()
+    asyncio.run(_close_single_auction(close_db, ids["auction_id"], datetime.now(timezone.utc)))
+    close_db.close()
+
+    db = SessionLocal()
+    auction = db.get(Auction, ids["auction_id"])
+    assert auction.status == "Active"  # unchanged
+    db.close()
+    assert _closure_log_count(ids["auction_id"]) == 0
 
 
 def test_auto_close_releases_wallet_hold_exactly_once_on_reserve_not_met(reserve_not_met_auction):
