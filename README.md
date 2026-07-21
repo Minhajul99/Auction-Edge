@@ -131,7 +131,7 @@ npm run dev
 ```
 
 - Backend: http://127.0.0.1:8000 (Swagger docs at `/docs`)
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5174
 
 Register an account, create a listing, then place a bid from a second account
 (a different browser or an incognito window works well) to confirm the stack
