@@ -119,3 +119,7 @@ export function retractBid(auctionId, bidId) {
 export function getBidHistory(auctionId) {
   return request(`/auctions/${auctionId}/bids/history`);
 }
+
+export function getMyBids() {
+  return request("/auctions/bids/mine");
+}

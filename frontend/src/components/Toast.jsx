@@ -5,6 +5,7 @@ const ToastContext = createContext(null);
 const VARIANT_CLASSES = {
   success: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/80 dark:text-emerald-300",
   error: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/80 dark:text-red-300",
+  warning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/80 dark:text-amber-300",
 };
 
 export function ToastProvider({ children }) {

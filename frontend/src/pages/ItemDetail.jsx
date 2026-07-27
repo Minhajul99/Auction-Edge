@@ -1,9 +1,18 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getAuction, getBidHistory, placeBid, acceptHighestBid, cancelAuction } from "../services/api";
+import {
+  getAuction,
+  getBidHistory,
+  placeBid,
+  acceptHighestBid,
+  cancelAuction,
+  retractBid,
+  getMyBids,
+} from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { useAuctionSocket } from "../hooks/useAuctionSocket";
 import { useToast } from "../components/Toast";
+import { isRetractable } from "../utils/bidWindow";
 
 function formatRemaining(remaining) {
   const totalSeconds = Math.floor(remaining / 1000);
@@ -84,11 +93,36 @@ export default function ItemDetail() {
   const [live, setLive] = useState(false);
   const [sellerActionError, setSellerActionError] = useState(null);
   const [sellerActionBusy, setSellerActionBusy] = useState(false);
+  const [myBid, setMyBid] = useState(null);
+  const [retracting, setRetracting] = useState(false);
+  const prevMyBidStatusRef = useRef(null);
+
+  const refreshMyBid = useCallback(() => {
+    if (!auth) return;
+    getMyBids()
+      .then((bids) => {
+        const mine = bids
+          .filter((b) => b.auction_id === auctionId)
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+
+        if (
+          prevMyBidStatusRef.current === "active" &&
+          mine &&
+          mine.status === "outbid"
+        ) {
+          showToast("You've been outbid — bid again to stay in the running.", "warning");
+        }
+        prevMyBidStatusRef.current = mine ? mine.status : null;
+        setMyBid(mine || null);
+      })
+      .catch(() => {});
+  }, [auctionId, auth, showToast]);
 
   const refresh = useCallback(() => {
     getAuction(auctionId).then(setAuction).catch((err) => setError(err.message));
     getBidHistory(auctionId).then(setHistory).catch((err) => setError(err.message));
-  }, [auctionId]);
+    refreshMyBid();
+  }, [auctionId, refreshMyBid]);
 
   useEffect(() => {
     refresh();
@@ -108,7 +142,23 @@ export default function ItemDetail() {
         : prev
     );
     getBidHistory(auctionId).then(setHistory).catch(() => {});
+    refreshMyBid();
   });
+
+  async function handleRetract() {
+    if (!myBid) return;
+    setError(null);
+    setRetracting(true);
+    try {
+      await retractBid(auctionId, myBid.id);
+      showToast("Bid retracted.");
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRetracting(false);
+    }
+  }
 
   async function handleBidSubmit(e) {
     e.preventDefault();
@@ -281,6 +331,33 @@ export default function ItemDetail() {
                     </button>
                   </div>
                 ) : auth ? (
+                  <div className="flex flex-col gap-4">
+                    {myBid && myBid.status === "active" && (
+                      <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 dark:bg-emerald-500/10">
+                        <div className="text-sm">
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                            You're leading
+                          </span>
+                          <span className="text-emerald-600/80 dark:text-emerald-400/80"> — ${myBid.amount}</span>
+                        </div>
+                        {isRetractable(myBid.timestamp) && (
+                          <button
+                            type="button"
+                            disabled={retracting}
+                            onClick={handleRetract}
+                            className="shrink-0 rounded-md border border-emerald-300 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+                          >
+                            {retracting ? "Retracting..." : "Retract"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {myBid && myBid.status === "outbid" && (
+                      <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+                        You were outbid — your last bid was ${myBid.amount}.
+                      </div>
+                    )}
+
                   <form onSubmit={handleBidSubmit} className="flex flex-col gap-3">
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       Your bid amount
@@ -305,6 +382,7 @@ export default function ItemDetail() {
                       {submitting ? "Placing bid..." : "Place Bid"}
                     </button>
                   </form>
+                  </div>
                 ) : (
                   <p className="text-sm text-gray-600 dark:text-gray-300">
                     <Link to="/login" className="font-semibold text-brand-600 hover:underline dark:text-brand-400">
