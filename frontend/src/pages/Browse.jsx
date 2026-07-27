@@ -4,6 +4,28 @@ import { listAuctions } from "../services/api";
 import { CATEGORIES } from "../constants";
 
 const ENDING_SOON_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const PAGE_SIZE = 24;
+
+const SORT_OPTIONS = [
+  { value: "newest", label: "Newest" },
+  { value: "ending_soonest", label: "Ending soonest" },
+  { value: "price_asc", label: "Price: low to high" },
+  { value: "price_desc", label: "Price: high to low" },
+];
+
+function sortAuctions(auctions, sortBy) {
+  const sorted = [...auctions];
+  switch (sortBy) {
+    case "ending_soonest":
+      return sorted.sort((a, b) => new Date(a.end_time) - new Date(b.end_time));
+    case "price_asc":
+      return sorted.sort((a, b) => Number(a.current_price) - Number(b.current_price));
+    case "price_desc":
+      return sorted.sort((a, b) => Number(b.current_price) - Number(a.current_price));
+    default:
+      return sorted;
+  }
+}
 
 function PlaceholderImage() {
   return (
@@ -159,19 +181,134 @@ function CategoryFilter({ selected, onSelect }) {
   );
 }
 
+function SearchAndFilters({ search, onSearch, sortBy, onSort, minPrice, maxPrice, onMinPrice, onMaxPrice }) {
+  return (
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="relative w-full sm:max-w-xs">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+        >
+          <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clipRule="evenodd" />
+        </svg>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Search listings..."
+          className="w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-900 dark:text-white"
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-gray-400">$</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={minPrice}
+            onChange={(e) => onMinPrice(e.target.value)}
+            placeholder="Min"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-900 dark:text-white"
+          />
+          <span className="text-gray-400">–</span>
+          <span className="text-gray-400">$</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={maxPrice}
+            onChange={(e) => onMaxPrice(e.target.value)}
+            placeholder="Max"
+            className="w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-900 dark:text-white"
+          />
+        </div>
+
+        <select
+          value={sortBy}
+          onChange={(e) => onSort(e.target.value)}
+          className="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-900 dark:text-white"
+        >
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              Sort: {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 export default function Browse() {
   const [auctions, setAuctions] = useState([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [category, setCategory] = useState(null);
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("newest");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+
+  // Price filters are server-side and re-fetch on every keystroke, so
+  // debounce them to avoid hammering the API while the user is still typing.
+  const [debouncedMinPrice, setDebouncedMinPrice] = useState("");
+  const [debouncedMaxPrice, setDebouncedMaxPrice] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedMinPrice(minPrice);
+      setDebouncedMaxPrice(maxPrice);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [minPrice, maxPrice]);
 
   useEffect(() => {
     setLoading(true);
-    listAuctions("Active", category)
-      .then(setAuctions)
+    setPage(1);
+    listAuctions("Active", category, {
+      minPrice: debouncedMinPrice,
+      maxPrice: debouncedMaxPrice,
+      page: 1,
+      pageSize: PAGE_SIZE,
+    })
+      .then((results) => {
+        setAuctions(results);
+        setHasMore(results.length === PAGE_SIZE);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [category]);
+  }, [category, debouncedMinPrice, debouncedMaxPrice]);
+
+  function loadMore() {
+    const nextPage = page + 1;
+    setLoadingMore(true);
+    listAuctions("Active", category, {
+      minPrice: debouncedMinPrice,
+      maxPrice: debouncedMaxPrice,
+      page: nextPage,
+      pageSize: PAGE_SIZE,
+    })
+      .then((results) => {
+        setAuctions((prev) => [...prev, ...results]);
+        setHasMore(results.length === PAGE_SIZE);
+        setPage(nextPage);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoadingMore(false));
+  }
+
+  const visibleAuctions = useMemo(() => {
+    const filtered = search.trim()
+      ? auctions.filter((a) => a.title.toLowerCase().includes(search.trim().toLowerCase()))
+      : auctions;
+    return sortAuctions(filtered, sortBy);
+  }, [auctions, search, sortBy]);
 
   return (
     <div>
@@ -194,22 +331,52 @@ export default function Browse() {
 
       <CategoryFilter selected={category} onSelect={setCategory} />
 
+      <SearchAndFilters
+        search={search}
+        onSearch={setSearch}
+        sortBy={sortBy}
+        onSort={setSortBy}
+        minPrice={minPrice}
+        maxPrice={maxPrice}
+        onMinPrice={setMinPrice}
+        onMaxPrice={setMaxPrice}
+      />
+
       {loading ? (
         <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <CardSkeleton key={i} />
           ))}
         </div>
-      ) : auctions.length === 0 ? (
+      ) : visibleAuctions.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-300 py-16 text-center text-gray-500 dark:border-white/15 dark:text-gray-400">
-          {category ? `No active auctions in ${category} right now.` : "No active auctions right now — check back soon."}
+          {search.trim()
+            ? `No active auctions match "${search.trim()}".`
+            : category
+              ? `No active auctions in ${category} right now.`
+              : "No active auctions right now — check back soon."}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
-          {auctions.map((a) => (
-            <AuctionCard key={a.id} auction={a} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+            {visibleAuctions.map((a) => (
+              <AuctionCard key={a.id} auction={a} />
+            ))}
+          </div>
+
+          {hasMore && !search.trim() && (
+            <div className="mt-8 flex justify-center">
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded-md border border-gray-300 px-5 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/15 dark:text-gray-200 dark:hover:bg-white/10"
+              >
+                {loadingMore ? "Loading..." : "Load more"}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

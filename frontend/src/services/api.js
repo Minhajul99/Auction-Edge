@@ -77,10 +77,15 @@ export function createAuction(auction) {
   });
 }
 
-export function listAuctions(statusFilter, category) {
+export function listAuctions(statusFilter, category, opts = {}) {
+  const { minPrice, maxPrice, page, pageSize } = opts;
   const params = new URLSearchParams();
   if (statusFilter) params.set("status_filter", statusFilter);
   if (category) params.set("category", category);
+  if (minPrice != null && minPrice !== "") params.set("min_price", minPrice);
+  if (maxPrice != null && maxPrice !== "") params.set("max_price", maxPrice);
+  if (page != null) params.set("page", page);
+  if (pageSize != null) params.set("page_size", pageSize);
   const query = params.toString() ? `?${params.toString()}` : "";
   return request(`/auctions${query}`);
 }
