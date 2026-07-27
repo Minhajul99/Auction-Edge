@@ -37,6 +37,17 @@ class ItemCreate(BaseModel):
         return v
 
 
+class PhotoUpdate(BaseModel):
+    photo: str
+
+    @field_validator("photo")
+    @classmethod
+    def photo_not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("photo is required")
+        return v
+
+
 class ItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

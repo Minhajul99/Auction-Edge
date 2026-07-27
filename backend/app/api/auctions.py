@@ -12,7 +12,7 @@ from app.models.item import Item
 from app.models.auction import Auction
 from app.models.bid import Bid
 from app.models.user import User
-from app.schemas.item import ItemCreate, ItemOut
+from app.schemas.item import ItemCreate, ItemOut, PhotoUpdate
 from app.schemas.auction import AuctionCreate, AuctionOut, DurationDays
 from app.core.bidding import validate_buy_it_now, BuyItNowRejected
 from app.core.notifications import create_notification
@@ -313,6 +313,33 @@ async def cancel_auction(
     db.refresh(auction)
 
     await manager.broadcast(auction_id, _auction_to_ws_payload(auction, "auction_cancelled"))
+
+    return _to_auction_out(auction)
+
+
+@router.post("/{auction_id}/photo", response_model=AuctionOut)
+def update_photo(
+    auction_id: uuid.UUID,
+    photo_in: PhotoUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Lets the seller replace their listing's photo after the fact -- purely
+    cosmetic Item data, so unlike cancel/relist this is allowed regardless
+    of the auction's status.
+    """
+    auction = db.get(Auction, auction_id)
+    if auction is None:
+        raise HTTPException(status_code=404, detail="Auction not found")
+
+    item = db.get(Item, auction.item_id)
+    if item.seller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own listings.")
+
+    item.photos = [photo_in.photo]
+    db.commit()
+    db.refresh(auction)
 
     return _to_auction_out(auction)
 

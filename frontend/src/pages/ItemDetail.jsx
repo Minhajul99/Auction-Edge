@@ -8,11 +8,13 @@ import {
   cancelAuction,
   retractBid,
   getMyBids,
+  updateAuctionPhoto,
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { useAuctionSocket } from "../hooks/useAuctionSocket";
 import { useToast } from "../components/Toast";
 import { isRetractable } from "../utils/bidWindow";
+import { MAX_PHOTO_SIZE_BYTES, fileToDataUrl } from "../utils/image";
 
 function formatRemaining(remaining) {
   const totalSeconds = Math.floor(remaining / 1000);
@@ -95,6 +97,8 @@ export default function ItemDetail() {
   const [sellerActionBusy, setSellerActionBusy] = useState(false);
   const [myBid, setMyBid] = useState(null);
   const [retracting, setRetracting] = useState(false);
+  const [photoError, setPhotoError] = useState(null);
+  const [changingPhoto, setChangingPhoto] = useState(false);
   const prevMyBidStatusRef = useRef(null);
 
   const refreshMyBid = useCallback(() => {
@@ -157,6 +161,34 @@ export default function ItemDetail() {
       setError(err.message);
     } finally {
       setRetracting(false);
+    }
+  }
+
+  async function handlePhotoChange(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    setPhotoError(null);
+    if (!file.type.startsWith("image/")) {
+      setPhotoError("Please choose an image file.");
+      return;
+    }
+    if (file.size > MAX_PHOTO_SIZE_BYTES) {
+      setPhotoError("Image is too large — please choose one under 2MB.");
+      return;
+    }
+
+    setChangingPhoto(true);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const updated = await updateAuctionPhoto(auctionId, dataUrl);
+      setAuction((prev) => (prev ? { ...prev, photo: updated.photo } : prev));
+      showToast("Photo updated.");
+    } catch (err) {
+      setPhotoError(err.message);
+    } finally {
+      setChangingPhoto(false);
     }
   }
 
@@ -237,16 +269,40 @@ export default function ItemDetail() {
 
       <div className="grid gap-8 md:grid-cols-5">
         <div className="md:col-span-3">
-          {auction.photo ? (
-            <img
-              src={auction.photo}
-              alt="Item"
-              className="w-full rounded-xl object-cover shadow-sm"
-              style={{ maxHeight: 360 }}
-            />
-          ) : (
-            <div className="flex aspect-video w-full items-center justify-center rounded-xl bg-gray-100 text-gray-300 dark:bg-gray-800 dark:text-gray-600">
-              No photo
+          <div className="relative">
+            {auction.photo ? (
+              <img
+                src={auction.photo}
+                alt="Item"
+                className="w-full rounded-xl object-cover shadow-sm"
+                style={{ maxHeight: 360 }}
+              />
+            ) : (
+              <div className="flex aspect-video w-full items-center justify-center rounded-xl bg-gray-100 text-gray-300 dark:bg-gray-800 dark:text-gray-600">
+                No photo
+              </div>
+            )}
+
+            {isSeller && (
+              <label className="absolute right-3 bottom-3 flex cursor-pointer items-center gap-1.5 rounded-md bg-black/60 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm transition-colors hover:bg-black/75">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                  <path fillRule="evenodd" d="M2 6a2 2 0 012-2h1.172a2 2 0 001.414-.586l.828-.828A2 2 0 018.828 2h2.344a2 2 0 011.414.586l.828.828A2 2 0 0014.828 4H16a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zm6 6a2 2 0 104 0 2 2 0 00-4 0z" clipRule="evenodd" />
+                </svg>
+                {changingPhoto ? "Uploading..." : "Change Photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoChange}
+                  disabled={changingPhoto}
+                  className="hidden"
+                />
+              </label>
+            )}
+          </div>
+
+          {photoError && (
+            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">
+              {photoError}
             </div>
           )}
 

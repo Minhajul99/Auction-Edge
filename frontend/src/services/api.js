@@ -102,6 +102,13 @@ export function cancelAuction(auctionId) {
   return request(`/auctions/${auctionId}/cancel`, { method: "POST" });
 }
 
+export function updateAuctionPhoto(auctionId, photoDataUrl) {
+  return request(`/auctions/${auctionId}/photo`, {
+    method: "POST",
+    body: JSON.stringify({ photo: photoDataUrl }),
+  });
+}
+
 // --- Bids ---
 export function placeBid(auctionId, amount) {
   return request(`/auctions/${auctionId}/bids`, {

@@ -3,19 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { createItem, createAuction } from "../services/api";
 import { useToast } from "../components/Toast";
 import { CATEGORIES, DURATIONS } from "../constants";
-
-// Keep uploaded images reasonably small since they're stored as base64
-// strings in the DB (no external file storage / CDN set up yet).
-const MAX_PHOTO_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import { MAX_PHOTO_SIZE_BYTES, fileToDataUrl } from "../utils/image";
 
 const inputClasses =
   "mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/15 dark:bg-gray-800 dark:text-white";
