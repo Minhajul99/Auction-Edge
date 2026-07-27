@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, ARRAY
+from sqlalchemy import Column, String, Boolean, ARRAY, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -17,6 +17,11 @@ class User(Base):
     email_verified = Column(Boolean, default=False, nullable=False)
     roles = Column(ARRAY(String), default=list)  # e.g. ["seller", "bidder"]
     is_admin = Column(Boolean, default=False, nullable=False)
+    avatar = Column(String, nullable=True)  # base64 data URL, same storage pattern as Item.photos
+
+    # Password reset -- single-use token + expiry, cleared once consumed.
+    reset_token = Column(String, nullable=True, unique=True)
+    reset_token_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     items = relationship("Item", back_populates="seller")

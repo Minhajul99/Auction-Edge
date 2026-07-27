@@ -52,6 +52,17 @@ export function getUser(userId) {
   return request(`/users/${userId}`);
 }
 
+export function getMyProfile() {
+  return request("/users/me");
+}
+
+export function updateProfile(fields) {
+  return request("/users/me", {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
 export function getNotifications(userId) {
   return request(`/users/${userId}/notifications`);
 }
@@ -134,4 +145,11 @@ export function getMyBids() {
 // --- Wallet ---
 export function getWallet() {
   return request("/wallet/me");
+}
+
+export function depositFunds(amount) {
+  return request("/wallet/deposit", {
+    method: "POST",
+    body: JSON.stringify({ amount }),
+  });
 }

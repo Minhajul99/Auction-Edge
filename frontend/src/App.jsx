@@ -5,7 +5,9 @@ import Browse from "./pages/Browse";
 import ItemDetail from "./pages/ItemDetail";
 import CreateListing from "./pages/CreateListing";
 import Login from "./pages/Login";
+import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
+import Profile from "./pages/Profile";
 
 function Logo() {
   return (
@@ -56,9 +58,25 @@ function NavBar() {
         <div className="ml-auto flex items-center gap-3">
           {auth ? (
             <>
-              <span className="hidden text-sm text-gray-500 sm:inline dark:text-gray-400">
-                {auth.user.first_name} {auth.user.last_name}
-              </span>
+              <Link
+                to="/profile"
+                className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+              >
+                {auth.user.avatar ? (
+                  <img
+                    src={auth.user.avatar}
+                    alt=""
+                    className="h-6 w-6 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-[10px] font-bold text-white">
+                    {(auth.user.first_name?.[0] || "") + (auth.user.last_name?.[0] || "")}
+                  </span>
+                )}
+                <span className="hidden sm:inline">
+                  {auth.user.first_name} {auth.user.last_name}
+                </span>
+              </Link>
               <button
                 onClick={logout}
                 className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:border-white/15 dark:text-gray-200 dark:hover:bg-white/10"
@@ -106,6 +124,7 @@ export default function App() {
                 <Route path="/" element={<Browse />} />
                 <Route path="/auctions/:auctionId" element={<ItemDetail />} />
                 <Route path="/login" element={<Login />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
                 <Route
                   path="/create"
                   element={
@@ -119,6 +138,14 @@ export default function App() {
                   element={
                     <RequireAuth>
                       <Dashboard />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/profile"
+                  element={
+                    <RequireAuth>
+                      <Profile />
                     </RequireAuth>
                   }
                 />

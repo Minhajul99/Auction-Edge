@@ -58,12 +58,45 @@ export function AuthProvider({ children }) {
     setAuth({ token: data.access_token, user: data.user });
   }
 
+  async function forgotPassword(email) {
+    const res = await fetch(`${BASE_URL}/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(extractErrorDetail(body, "Something went wrong. Please try again."));
+    }
+    return res.json(); // { message, reset_token? } -- reset_token only set in debug mode
+  }
+
+  async function resetPassword(token, newPassword) {
+    const res = await fetch(`${BASE_URL}/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(extractErrorDetail(body, "Reset failed"));
+    }
+    const data = await res.json();
+    setAuth({ token: data.access_token, user: data.user });
+  }
+
+  function updateUser(partialUser) {
+    setAuth((prev) => (prev ? { ...prev, user: { ...prev.user, ...partialUser } } : prev));
+  }
+
   function logout() {
     setAuth(null);
   }
 
   return (
-    <AuthContext.Provider value={{ auth, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ auth, login, register, logout, forgotPassword, resetPassword, updateUser }}
+    >
       {children}
     </AuthContext.Provider>
   );
