@@ -266,6 +266,12 @@ async def retract_bid(
     price_changed = False
 
     if was_leading_bid:
+        # The session is autoflush=False (see db/database.py), so the
+        # status="withdrawn" write above isn't visible to a plain query yet
+        # -- without this flush, the query below still sees this bid as
+        # "active" and picks it right back as its own "next highest",
+        # leaving current_price unchanged instead of falling back correctly.
+        db.flush()
         next_highest = (
             db.query(Bid)
             .filter(Bid.auction_id == auction_id, Bid.status == "active")
@@ -327,6 +333,9 @@ def admin_cancel_bid(
     bid.status = "withdrawn"
 
     if was_leading_bid:
+        # See retract_bid's comment above: autoflush=False means this flush
+        # is required for the query below to see the withdrawal.
+        db.flush()
         next_highest = (
             db.query(Bid)
             .filter(Bid.auction_id == auction_id, Bid.status == "active")
