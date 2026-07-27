@@ -123,3 +123,8 @@ export function getBidHistory(auctionId) {
 export function getMyBids() {
   return request("/auctions/bids/mine");
 }
+
+// --- Wallet ---
+export function getWallet() {
+  return request("/wallet/me");
+}

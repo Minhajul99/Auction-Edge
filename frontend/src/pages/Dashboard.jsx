@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { BASE_URL, extractErrorDetail } from "../services/api";
+import { BASE_URL, extractErrorDetail, retractBid, getWallet } from "../services/api";
 import { useToast } from "../components/Toast";
 import PaymentModal from "../components/PaymentModal";
+import { isRetractable } from "../utils/bidWindow";
 
 function authHeaders() {
   const saved = localStorage.getItem("auctionedge_auth");
@@ -101,23 +102,45 @@ function EmptyRow({ children }) {
   return <p className="py-2 text-sm text-gray-500 dark:text-gray-400">{children}</p>;
 }
 
+const TABS = [
+  { key: "listings", label: "My Listings" },
+  { key: "bids", label: "My Bids" },
+  { key: "notifications", label: "Notifications" },
+];
+
+function StatCard({ label, value, accent }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-gray-900">
+      <div className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+        {label}
+      </div>
+      <div className={`mt-1 text-2xl font-bold ${accent || "text-gray-900 dark:text-white"}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { showToast } = useToast();
   const [listings, setListings] = useState([]);
   const [bids, setBids] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [wallet, setWallet] = useState(null);
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [payingBid, setPayingBid] = useState(null);
+  const [activeTab, setActiveTab] = useState("listings");
 
   function loadAll() {
-    return Promise.all([getMyListings(), getMyBids(), getMyNotifications()]).then(
-      ([l, b, n]) => {
+    return Promise.all([getMyListings(), getMyBids(), getMyNotifications(), getWallet()]).then(
+      ([l, b, n, w]) => {
         setListings(l);
         setBids(b);
         setNotifications(n);
+        setWallet(w);
       }
     );
   }
@@ -131,6 +154,20 @@ export default function Dashboard() {
   async function handleMarkRead(id) {
     await markRead(id);
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  }
+
+  async function handleRetract(bid) {
+    setActionError(null);
+    setBusyId(bid.id);
+    try {
+      await retractBid(bid.auction_id, bid.id);
+      await loadAll();
+      showToast("Bid retracted.");
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function handleRelist(auctionId) {
@@ -186,11 +223,30 @@ export default function Dashboard() {
     );
   }
 
+  const activeListingsCount = listings.filter((a) => a.status === "Active").length;
+  const activeBidsCount = bids.filter((b) => b.status === "active").length;
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="mb-6 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
         Dashboard
       </h1>
+
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Active Listings" value={activeListingsCount} />
+        <StatCard label="Active Bids" value={activeBidsCount} />
+        <StatCard
+          label="Unread Alerts"
+          value={unreadCount}
+          accent={unreadCount > 0 ? "text-brand-600 dark:text-brand-400" : undefined}
+        />
+        <StatCard
+          label="Wallet Available"
+          value={wallet ? `$${wallet.available}` : "—"}
+          accent="text-emerald-600 dark:text-emerald-400"
+        />
+      </div>
 
       {actionError && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">
@@ -198,7 +254,40 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="mb-6 flex flex-wrap gap-2">
+        {TABS.map((t) => {
+          const isActive = t.key === activeTab;
+          const badgeCount = t.key === "notifications" ? unreadCount : 0;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={[
+                "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-brand-500 text-white shadow-sm"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20",
+              ].join(" ")}
+            >
+              {t.label}
+              {badgeCount > 0 && (
+                <span
+                  className={[
+                    "flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold",
+                    isActive ? "bg-white/25 text-white" : "bg-brand-500 text-white",
+                  ].join(" ")}
+                >
+                  {badgeCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex flex-col gap-6">
+        {activeTab === "listings" && (
         <Section title="My Listings">
           {listings.length === 0 ? (
             <EmptyRow>You haven't created any listings yet.</EmptyRow>
@@ -235,7 +324,9 @@ export default function Dashboard() {
             </ul>
           )}
         </Section>
+        )}
 
+        {activeTab === "bids" && (
         <Section title="My Bids">
           {bids.length === 0 ? (
             <EmptyRow>You haven't placed any bids yet.</EmptyRow>
@@ -255,13 +346,22 @@ export default function Dashboard() {
                       {new Date(b.timestamp).toLocaleString()}
                     </span>
                   </Link>
-                  <PayNowButton bid={b} onPay={() => setPayingBid(b)} />
+                  <div className="flex shrink-0 items-center gap-2">
+                    {b.status === "active" && isRetractable(b.timestamp) && (
+                      <SecondaryButton disabled={busyId === b.id} onClick={() => handleRetract(b)}>
+                        {busyId === b.id ? "Retracting..." : "Retract"}
+                      </SecondaryButton>
+                    )}
+                    <PayNowButton bid={b} onPay={() => setPayingBid(b)} />
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </Section>
+        )}
 
+        {activeTab === "notifications" && (
         <Section title="Notifications">
           {notifications.length === 0 ? (
             <EmptyRow>No notifications yet.</EmptyRow>
@@ -286,6 +386,7 @@ export default function Dashboard() {
             </ul>
           )}
         </Section>
+        )}
       </div>
 
       {payingBid && (
